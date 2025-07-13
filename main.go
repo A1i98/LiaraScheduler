@@ -519,7 +519,11 @@ func uptimeHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		if os.IsNotExist(err) {
+			log.Println("No .env file found, using environment variables or default values.")
+		} else {
+			log.Printf("Error loading .env file: %v", err)
+		}
 	}
 
 	// Set up a default log writer for general server logs
@@ -544,8 +548,8 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("Starting server on :%s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	log.Printf("Starting server on 0.0.0.0:%s", port)
+	if err := http.ListenAndServe("0.0.0.0:"+port, nil); err != nil {
 		log.Fatal(err)
 	}
 }
