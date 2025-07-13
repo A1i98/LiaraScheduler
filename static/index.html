@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Liara Service Scheduler</title>
+        <link rel="stylesheet" href="/static/style.css" />
+    </head>
+    <body>
+        <div class="container">
+            <div id="login-section">
+                <h1>Login</h1>
+                <form id="login-form">
+                    <input type="password" id="token-input" placeholder="Enter Liara API Token" required />
+                    <button type="submit">Login</button>
+                </form>
+                <p id="login-error" class="error-message"></p>
+            </div>
+
+            <div id="main-app-section" style="display: none">
+                <h1>Liara Service Scheduler</h1>
+
+                <div class="tabs">
+                    <button class="tab-button active" data-tab="projects">Projects</button>
+                    <button class="tab-button" data-tab="databases">Databases</button>
+                    <button class="tab-button" data-tab="schedules">Schedules</button>
+                    <button class="tab-button" data-tab="logs">Logs</button>
+                    <button class="tab-button" data-tab="uptime">Uptime</button>
+                </div>
+
+                <div id="projects-tab" class="tab-content active">
+                    <h2>Projects Status</h2>
+                    <ul id="project-status-list">
+                        <li>Loading projects...</li>
+                    </ul>
+                    <p id="project-error" class="error-message"></p>
+
+                    <h2>Schedule Project Action</h2>
+                    <div id="project-selection">
+                        <label for="project-select">Select a Project:</label>
+                        <select id="project-select">
+                            <option value="">Loading projects...</option>
+                        </select>
+                    </div>
+                    <form id="schedule-project-form">
+                        <label for="project-action-select">Action:</label>
+                        <select id="project-action-select" name="action">
+                            <option value="on">Turn On</option>
+                            <option value="off">Turn Off</option></select
+                        ><br />
+                        <label for="project-cron-input">Cron Expression:</label>
+                        <input type="text" id="project-cron-input" name="cron" placeholder="e.g., 0 0 8 * * * (8 AM daily), @every 1h" required /><br />
+                        <button type="submit">Add Project Schedule</button>
+                    </form>
+                </div>
+
+                <div id="databases-tab" class="tab-content">
+                    <h2>Databases Status</h2>
+                    <ul id="database-status-list">
+                        <li>Loading databases...</li>
+                    </ul>
+                    <p id="database-error" class="error-message"></p>
+
+                    <h2>Schedule Database Action</h2>
+                    <div id="database-selection">
+                        <label for="database-select">Select a Database:</label>
+                        <select id="database-select">
+                            <option value="">Loading databases...</option>
+                        </select>
+                    </div>
+                    <form id="schedule-database-form">
+                        <label for="database-action-select">Action:</label>
+                        <select id="database-action-select" name="action">
+                            <option value="on">Turn On</option>
+                            <option value="off">Turn Off</option></select
+                        ><br />
+                        <label for="database-cron-input">Cron Expression:</label>
+                        <input type="text" id="database-cron-input" name="cron" placeholder="e.g., 0 0 8 * * * (8 AM daily), @every 1h" required /><br />
+                        <button type="submit">Add Database Schedule</button>
+                    </form>
+                </div>
+
+                <div id="schedules-tab" class="tab-content">
+                    <h2 id="current-time-display">Current Time: Loading...</h2>
+                    <h2>Current Schedules</h2>
+                    <ul id="current-schedules">
+                        <li>No schedules added yet.</li>
+                    </ul>
+                </div>
+
+                <div id="logs-tab" class="tab-content">
+                    <h2>Server Logs (per token)</h2>
+                    <pre id="server-logs">Loading logs...</pre>
+                </div>
+
+                <div id="uptime-tab" class="tab-content">
+                    <h2>Server Uptime</h2>
+                    <p id="server-uptime">Loading uptime...</p>
+                </div>
+            </div>
+        </div>
+        <script src="/static/script.js"></script>
+    </body>
+</html>
