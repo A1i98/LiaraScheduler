@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 	"github.com/robfig/cron/v3"
 )
 
@@ -93,22 +95,9 @@ var (
 	tokenLogs       = make(map[string]*bytes.Buffer)
 	logsMu          sync.Mutex // For thread-safety for tokenLogs
 	serverStartTime = time.Now()
+
+	db *sql.DB
 )
-
-// Custom log writer to store logs in memory per token
-type TokenLogWriter struct {
-	token string
-}
-
-func (writer *TokenLogWriter) Write(p []byte) (n int, err error) {
-	logsMu.Lock()
-	defer logsMu.Unlock()
-
-	if _, ok := tokenLogs[writer.token]; !ok {
-		tokenLogs[writer.token] = new(bytes.Buffer)
-	}
-	return tokenLogs[writer.token].Write(p)
-}
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +222,17 @@ func scheduleHandler(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	schedules = append(schedules, Schedule{ServiceName: serviceName, ServiceType: serviceType, Action: action, CronSpec: cronSpec, JobID: jobID})
 	mu.Unlock()
+
+	if db != nil {
+		_, err := db.Exec("INSERT INTO schedules (job_id, service_name, service_type, action, cron_spec) VALUES ($1, $2, $3, $4, $5)",
+			jobID, serviceName, serviceType, action, cronSpec)
+		if err != nil {
+			log.Printf("Error saving schedule to database: %v", err)
+			http.Error(w, `{"error": "Failed to save schedule to database"}`, http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Schedule saved to database: ServiceName=%s, CronSpec=%s", serviceName, cronSpec)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -476,6 +476,16 @@ func deleteScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if db != nil {
+		_, err := db.Exec("DELETE FROM schedules WHERE job_id = $1", jobID)
+		if err != nil {
+			log.Printf("Error deleting schedule from database: %v", err)
+			http.Error(w, `{"error": "Failed to delete schedule from database"}`, http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Schedule deleted from database: JobID=%d", jobID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Schedule deleted successfully"})
@@ -488,20 +498,45 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logsMu.Lock()
-	defer logsMu.Unlock()
-
-	logBuffer, ok := tokenLogs[token]
-	if !ok {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("No logs available for this token."))
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write(logBuffer.Bytes())
+
+	if db != nil {
+		// Fetch logs from PostgreSQL
+		rows, err := db.Query("SELECT timestamp, message FROM logs WHERE token = $1 ORDER BY timestamp ASC", token)
+		if err != nil {
+			log.Printf("Error querying logs from database: %v", err)
+			http.Error(w, `{"error": "Failed to fetch logs from database"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var logOutput bytes.Buffer
+		for rows.Next() {
+			var timestamp time.Time
+			var message string
+			if err := rows.Scan(&timestamp, &message); err != nil {
+				log.Printf("Error scanning log row: %v", err)
+				continue
+			}
+			logOutput.WriteString(fmt.Sprintf("%s: %s", timestamp.Format(time.RFC3339), message))
+		}
+		if logOutput.Len() == 0 {
+			w.Write([]byte("No logs available for this token in the database."))
+		} else {
+			w.Write(logOutput.Bytes())
+		}
+	} else {
+		// Fetch logs from in-memory buffer
+		logsMu.Lock()
+		logBuffer, ok := tokenLogs[token]
+		logsMu.Unlock()
+		if !ok || logBuffer.Len() == 0 {
+			w.Write([]byte("No logs available for this token in memory."))
+		} else {
+			w.Write(logBuffer.Bytes())
+		}
+	}
 }
 
 func uptimeHandler(w http.ResponseWriter, r *http.Request) {
@@ -516,6 +551,136 @@ func uptimeHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"uptime": uptime.String()})
 }
 
+func initDB() {
+	connStr := os.Getenv("DATABASE_URL")
+	if connStr == "" {
+		log.Println("DATABASE_URL not set, using in-memory storage for logs and schedules.")
+		return
+	}
+
+	var err error
+	db, err = sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatalf("Error opening database connection: %v", err)
+	}
+
+	// Ping the database to verify connection
+	err = db.Ping()
+	if err != nil {
+		log.Fatalf("Error connecting to the database: %v", err)
+	}
+
+	log.Println("Successfully connected to PostgreSQL database.")
+
+	// Create tables if they don't exist
+	createSchedulesTableSQL := `
+	CREATE TABLE IF NOT EXISTS schedules (
+		job_id BIGINT PRIMARY KEY,
+		service_name TEXT NOT NULL,
+		service_type TEXT NOT NULL,
+		action TEXT NOT NULL,
+		cron_spec TEXT NOT NULL
+	);`
+	_, err = db.Exec(createSchedulesTableSQL)
+	if err != nil {
+		log.Fatalf("Error creating schedules table: %v", err)
+	}
+	log.Println("Schedules table checked/created.")
+
+	createLogsTableSQL := `
+	CREATE TABLE IF NOT EXISTS logs (
+		id SERIAL PRIMARY KEY,
+		token TEXT NOT NULL,
+		timestamp TIMESTAMPTZ DEFAULT NOW(),
+		message TEXT NOT NULL
+	);`
+	_, err = db.Exec(createLogsTableSQL)
+	if err != nil {
+		log.Fatalf("Error creating logs table: %v", err)
+	}
+	log.Println("Logs table checked/created.")
+
+	// Load existing schedules from DB
+	rows, err := db.Query("SELECT job_id, service_name, service_type, action, cron_spec FROM schedules")
+	if err != nil {
+		log.Printf("Error querying schedules from DB: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for rows.Next() {
+		var s Schedule
+		var jobID int64
+		if err := rows.Scan(&jobID, &s.ServiceName, &s.ServiceType, &s.Action, &s.CronSpec); err != nil {
+			log.Printf("Error scanning schedule row: %v", err)
+			continue
+		}
+		s.JobID = cron.EntryID(jobID)
+
+		capturedToken := os.Getenv("LIARA_API_TOKEN")
+		if capturedToken == "" {
+			log.Println("LIARA_API_TOKEN not set, cannot re-add schedules from DB.")
+			continue
+		}
+
+		jobIDFromCron, err := scheduler.AddFunc(s.CronSpec, func() {
+			if s.ServiceType == "project" {
+				scaleProject(s.ServiceName, s.Action == "on", capturedToken)
+			} else if s.ServiceType == "database" {
+				scaleDatabase(s.ServiceName, s.Action == "on", capturedToken)
+			}
+		})
+		if err != nil {
+			log.Printf("Error re-adding cron job from DB: %v", err)
+			continue
+		}
+		s.JobID = jobIDFromCron // Update with new cron job ID
+		schedules = append(schedules, s)
+		log.Printf("Re-added schedule from DB: ServiceName=%s, CronSpec=%s", s.ServiceName, s.CronSpec)
+	}
+}
+
+// LogEntry struct for database logs
+type LogEntry struct {
+	Token     string    `json:"token"`
+	Timestamp time.Time `json:"timestamp"`
+	Message   string    `json:"message"`
+}
+
+// Custom log writer to store logs in memory or database per token
+type TokenLogWriter struct {
+	token string
+}
+
+func (writer *TokenLogWriter) Write(p []byte) (n int, err error) {
+	logsMu.Lock()
+	defer logsMu.Unlock()
+
+	message := string(p)
+
+	if db != nil {
+		// Write to PostgreSQL
+		_, err := db.Exec("INSERT INTO logs (token, message) VALUES ($1, $2)", writer.token, message)
+		if err != nil {
+			log.Printf("Error writing log to database: %v", err)
+			// Fallback to in-memory if DB write fails
+			if _, ok := tokenLogs[writer.token]; !ok {
+				tokenLogs[writer.token] = new(bytes.Buffer)
+			}
+			return tokenLogs[writer.token].Write(p)
+		}
+		return len(p), nil
+	} else {
+		// Write to in-memory buffer
+		if _, ok := tokenLogs[writer.token]; !ok {
+			tokenLogs[writer.token] = new(bytes.Buffer)
+		}
+		return tokenLogs[writer.token].Write(p)
+	}
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -526,6 +691,7 @@ func main() {
 		}
 	}
 
+	initDB()
 	// Set up a default log writer for general server logs
 	log.SetOutput(os.Stdout)
 
