@@ -220,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 const databases = await response.json();
                 databaseStatusList.innerHTML = '';
-                databaseSelect.innerHTML = '';
+                databaseSelect.innerHTML = '<option value="">Select a database...</option>';
                 if (databases.length === 0) {
                     databaseStatusList.innerHTML = '<li>No databases found.</li>';
                     databaseSelect.innerHTML = '<option value="">No databases found</option>';
@@ -231,8 +231,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         databaseStatusList.appendChild(li);
 
                         const option = document.createElement('option');
-                        option.value = db.DBId;
-                        option.textContent = db.DBId;
+                        option.value = db.DBId || '';
+                        option.textContent = `${db.DBId || ''} (${db.type} - ${db.hostname})`;
                         databaseSelect.appendChild(option);
                     });
                 }
